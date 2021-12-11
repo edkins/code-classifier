@@ -45,7 +45,7 @@ def get_ssh_profile():
         raise Exception('Need exactly one default profile')
 
 def do_rsync(ssh_profile):
-    subprocess.run(['rsync','-r','./src',f'{ssh_profile}:~'])
+    subprocess.run(['rsync','-r','./requirements.txt','./alembic.ini','./alembic','./src',f'{ssh_profile}:~'])
 
 def do_remote_code_classification(ssh_profile, args):
     subprocess.run(['ssh', ssh_profile, 'python3', 'src/cc.py', *args])
