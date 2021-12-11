@@ -46,19 +46,43 @@ def listing_rm(args):
     con.close()
 
 def listing_scrape(args):
-    print('importing cc_scrape')
     from cc_scrape import scrape_listing_url
-    print('connecting to sqlite')
     con = sqlite3.connect(db_name)
     cur = con.cursor()
+    listing_id = None
     url = None
-    for row in cur.execute("select url from listing where name=?", (args.name,)):
-        url, = row
-    if url == None:
+    for row in cur.execute("select id,url from listing where name=?", (args.name,)):
+        listing_id, url = row
+    if listing_id == None or url == None:
         raise Exception('No such listing')
-    print('scraping...')
-    for code_url in scrape_listing_url(url):
-        print(code_url)
+    names_and_urls = scrape_listing_url(url)
+    id_name_urls = [(listing_id,name,url) for name,url in names_and_urls]
+    print(f'Inserting {len(id_name_urls)} items')
+    cur.execute("delete from listing_elem where listing_id=?", (listing_id,))
+    cur.executemany("insert into listing_elem(listing_id,name,url) values (?,?,?)", id_name_urls)
+    con.commit()
+    con.close()
+
+def listing_get(args):
+    con = sqlite3.connect(db_name)
+    cur = con.cursor()
+    listing_id = None
+    url = None
+    for row in cur.execute("select id,url from listing where name=?", (args.name,)):
+        listing_id, url = row
+    if listing_id == None or url == None:
+        raise Exception('No such listing')
+    print(f'id = {listing_id}')
+    print(f'name = {args.name}')
+    print(f'url = {url}')
+    print('Listing:')
+    count = 0
+    for row in cur.execute("select name,url from listing_elem where listing_id=? order by name asc", (listing_id,)):
+        name,url = row
+        print(f'    {name:30} {url}')
+        count ++ 1
+    print(f'{count} results.')
+    con.close()
 
 def subcommand_required(args):
     raise Exception('Subcommand required')
@@ -83,14 +107,17 @@ def main():
         parser_listing_ls.set_defaults(func=listing_ls)
         parser_listing_add = subparsers_listing.add_parser('add')
         parser_listing_add.set_defaults(func=listing_add)
-        parser_listing_add.add_argument('--name', required=True)
+        parser_listing_add.add_argument('--name', '-n', required=True)
         parser_listing_add.add_argument('--url', required=True)
         parser_listing_rm = subparsers_listing.add_parser('rm')
         parser_listing_rm.set_defaults(func=listing_rm)
-        parser_listing_rm.add_argument('--name', required=True)
+        parser_listing_rm.add_argument('--name', '-n', required=True)
         parser_listing_scrape = subparsers_listing.add_parser('scrape')
         parser_listing_scrape.set_defaults(func=listing_scrape)
-        parser_listing_scrape.add_argument('--name', required=True)
+        parser_listing_scrape.add_argument('--name', '-n', required=True)
+        parser_listing_get = subparsers_listing.add_parser('get')
+        parser_listing_get.set_defaults(func=listing_get)
+        parser_listing_get.add_argument('--name', '-n', required=True)
 
         args = parser.parse_args()
         args.func(args)

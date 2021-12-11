@@ -2,9 +2,19 @@ import io
 import panflute
 import requests
 
+def panflute_to_string(container):
+    string = ''
+    for elem in container:
+        if isinstance(elem, panflute.Str):
+            string += elem.text
+        elif isinstance(elem, panflute.Space):
+            string += ' '
+    return string
+
 def action(elem, doc, links):
     if isinstance(elem, panflute.Link):
-        links.append(elem.url)
+        name = panflute_to_string(elem.content)
+        links.append((name, elem.url))
 
 def prepare(doc):
     pass
