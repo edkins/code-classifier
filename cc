@@ -1,10 +1,12 @@
 #!/usr/bin/python3
 
 from pathlib import Path
+from time import sleep
 import json
 import os
 import os.path
 import re
+import signal
 import subprocess
 import sys
 
@@ -45,10 +47,12 @@ def get_ssh_profile():
         raise Exception('Need exactly one default profile')
 
 def do_rsync(ssh_profile):
+    print('rsync')
     subprocess.run(['rsync','-r','./requirements.txt','./alembic.ini','./alembic','./src',f'{ssh_profile}:~'])
 
 def do_remote_code_classification(ssh_profile, args):
-    subprocess.run(['ssh', ssh_profile, 'python3', 'src/cc.py', *args])
+    print('ssh python3')
+    subprocess.run(['ssh', '-t', ssh_profile, 'python3', '-u', 'src/cc.py', *args])
 
 def main():
     if not os.path.exists(config_file):

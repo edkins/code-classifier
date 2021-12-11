@@ -1,1 +1,4 @@
 alembic
+panflute
+pypandoc
+requests
