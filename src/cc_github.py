@@ -62,5 +62,7 @@ def github_get_repo(con, owner, repo):
     requests_remaining = response.headers['x-ratelimit-remaining']
     print(f"{requests_remaining}/{response.headers['x-ratelimit-limit']} requests remaining. Status code = {response.status_code}")
     _after_request(con, requests_remaining)
-    response.raise_for_status()
-    return response.json()
+    if response.status_code == 200:
+        return response.json(), response.status_code
+    else:
+        return {}, response.status_code

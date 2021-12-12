@@ -12,10 +12,11 @@ def get_project_host(code_url):
     else:
         return None
 
-def fetch_project(con, host, code_url):
-    project_id = create_or_get_project_id(con, code_url)
-
-    if host == 'github':
+def fetch_project(con, host, code_url, refetch):
+    project_id = create_or_get_project_id(con, code_url, refetch)
+    if project_id == None:
+        pass
+    elif host == 'github':
         m = re_github.match(code_url)
         if m == None:
             raise Exception('url does not match github')
@@ -25,11 +26,12 @@ def fetch_project(con, host, code_url):
     else:
         raise Exception(f'Unknown code host {host}')
 
-def create_or_get_project_id(con, code_url):
+def create_or_get_project_id(con, code_url, refetch):
     cur = con.cursor()
     project_id = None
-    for row in cur.execute("SELECT id FROM project WHERE code_url = ?", (code_url,)):
-        project_id, = row
+    metadata_date = None
+    for row in cur.execute("SELECT id, metadata_date FROM project WHERE code_url = ?", (code_url,)):
+        project_id,metadata_date = row
     if project_id == None:
         cur.execute("INSERT INTO project(code_url) VALUES (?)", (code_url,))
         for row in cur.execute("SELECT id FROM project WHERE code_url = ?", (code_url,)):
@@ -38,11 +40,14 @@ def create_or_get_project_id(con, code_url):
             raise Exception("Don't know why insert didn't work")
         print(f"Created project with id={project_id}, code_url={code_url}")
         con.commit()
+    elif metadata_date != None and not refetch:
+        print(f'Skipping: already have metadata for {code_url}')
+        return None
     return project_id
 
 def fetch_project_github(con, project_id, code_url, owner, repo):
     from cc_github import github_get_repo
-    response = github_get_repo(con, owner, repo)
+    response, status_code = github_get_repo(con, owner, repo)
 
     cur = con.cursor()
     rowcount = cur.execute("""
@@ -63,28 +68,30 @@ SET
     main_branch = ?,
     create_date = ?,
     update_date = ?,
-    metadata_date = ?
+    metadata_date = ?,
+    metadata_status = ?
 WHERE
     id = ?
     AND code_url = ?
 """, 
         (
             'github',
-            response['name'],
-            None if response['homepage'] == code_url else response['homepage'],
+            response.get('name'),
+            None if response.get('homepage') == code_url else response.get('homepage'),
             None,
-            not response['private'],
-            response['fork'],
-            response['git_url'],
-            code_url,
-            response['language'],
-            response['size'],
-            response['forks_count'],
-            response['stargazers_count'],
-            response['default_branch'],
-            response['created_at'],
-            response['pushed_at'],
+            not response.get('private',True),
+            response.get('fork'),
+            response.get('git_url'),
+            code_url if status_code == 200 else None,
+            response.get('language'),
+            response.get('size'),
+            response.get('forks_count'),
+            response.get('stargazers_count'),
+            response.get('default_branch'),
+            response.get('created_at'),
+            response.get('pushed_at'),
             now_as_string(),
+            status_code,
 
             project_id,
             code_url
@@ -92,4 +99,3 @@ WHERE
     ).rowcount
     print(f'{rowcount} project metadata updated')
     con.commit()
-    return rowcount

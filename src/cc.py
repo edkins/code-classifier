@@ -63,6 +63,29 @@ def listing_scrape(args):
     con.commit()
     con.close()
 
+def listing_fetch(args):
+    from cc_project import get_project_host, fetch_project
+    con = sqlite3.connect(db_name)
+    cur = con.cursor()
+    listing_id = None
+    for row in cur.execute("select id from listing where name=?", (args.name,)):
+        listing_id, = row
+    if listing_id == None:
+        raise Exception('No such listing')
+
+    seen = 0
+    fetched = 0
+    for row in cur.execute("SELECT url FROM listing_elem WHERE listing_id = ?", (listing_id,)):
+        code_url, = row
+        host = get_project_host(code_url)
+        seen += 1
+        if host == None:
+            print(f'Skipping: No code host known for {code_url}')
+        else:
+            fetch_project(con, host, code_url, False)
+            fetched += 1
+    print(f'{seen} seen. {fetched} fetched. {seen-fetched} skipped.')
+
 def listing_get(args):
     con = sqlite3.connect(db_name)
     cur = con.cursor()
@@ -88,9 +111,9 @@ def project_ls(args):
     con = sqlite3.connect(db_name)
     cur = con.cursor()
     count = 0
-    for row in cur.execute("SELECT name, metadata_date, code_url FROM project"):
-        name, metadata_date, code_url = row
-        print(f'{name:20} {metadata_date:25} {code_url}')
+    for row in cur.execute("SELECT name, metadata_status, metadata_date, code_url FROM project ORDER BY name ASC, code_url ASC"):
+        name, metadata_status, metadata_date, code_url = row
+        print(f'{str(name):20} {str(metadata_status):4} {str(metadata_date):25} {code_url}')
         count += 1
     print(f'{count} results.')
 
@@ -101,7 +124,7 @@ def project_fetch(args):
     if host == None:
         raise Exception(f"Cannot identify code host for url {code_url}")
     con = sqlite3.connect(db_name)
-    fetch_project(con, host, code_url)
+    fetch_project(con, host, code_url, refetch=True)
     con.close()
 
 def subcommand_required(args):
@@ -141,6 +164,9 @@ def main():
     parser_listing_get = subparsers_listing.add_parser('get')
     parser_listing_get.set_defaults(func=listing_get)
     parser_listing_get.add_argument('--name', '-n', required=True)
+    parser_listing_fetch = subparsers_listing.add_parser('fetch')
+    parser_listing_fetch.set_defaults(func=listing_fetch)
+    parser_listing_fetch.add_argument('--name', '-n', required=True)
 
     parser_project = subparsers.add_parser('project')
     subparsers_project = parser_project.add_subparsers()
