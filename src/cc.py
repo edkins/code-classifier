@@ -150,7 +150,7 @@ def project_clone(args):
         for row in cur.execute("SELECT id, host, git_https FROM project WHERE name = ? LIMIT ?", (args.name,args.max)):
             projects.append(list(row))
     else:
-        for row in cur.execute("SELECT id, host, git_https FROM project WHERE metadata_status = 200 AND public = true AND is_fork = false AND fetch_date is null"):
+        for row in cur.execute("SELECT id, host, git_https FROM project WHERE metadata_status = 200 AND public = true AND is_fork = false AND fetch_date is null ORDER BY update_date DESC"):
             projects.append(list(row))
 
     if len(projects) == 0:
