@@ -143,25 +143,45 @@ def project_fetch(args):
 
 def project_clone(args):
     from cc_project import clone_project
-    project_id = None
-    host = None
-    git_https_url = None
+    projects = []
     con = sqlite3.connect(db_name)
     cur = con.cursor()
-    for row in cur.execute("SELECT id, host, git_https FROM project WHERE name = ?", (args.name,)):
-        if project_id != None:
-            raise Exception(f"Multiple projects with name {name}")
-        project_id, host, git_https_url = row
-    if project_id == None or host == None or git_https_url == None:
-        raise Exception(f"Could not find info on project {name}")
-    date, sha, location = clone_project(con, project_id, host, git_https_url)
-    cur.execute("""
-UPDATE project
-SET fetch_date = ?,
-    fetch_sha = ?,
-    fetch_location = ?
-WHERE id = ?
-""", (date, sha, location, project_id))
+    if args.name != None:
+        for row in cur.execute("SELECT id, host, git_https FROM project WHERE name = ? LIMIT ?", (args.name,args.max)):
+            projects.append(list(row))
+    else:
+        for row in cur.execute("SELECT id, host, git_https FROM project WHERE metadata_status = 200 AND public = true AND is_fork = false AND fetch_date is null"):
+            projects.append(list(row))
+
+    if len(projects) == 0:
+        print('No projects matched criteria.')
+        return
+
+    count = 0
+    for (project_id, host, git_https_url) in projects:
+        date, sha, location = clone_project(con, project_id, host, git_https_url)
+        cur.execute("""
+    UPDATE project
+    SET fetch_date = ?,
+        fetch_sha = ?,
+        fetch_location = ?
+    WHERE id = ?
+    """, (date, sha, location, project_id))
+        con.commit()
+        count += 1
+    print(f'{count} project(s) cloned.')
+    con.close()
+
+def project_rm(args):
+    con = sqlite3.connect(db_name)
+    cur = con.cursor()
+    if args.url != None:
+        rowcount = cur.execute("DELETE FROM project WHERE code_url = ?", (args.url,)).rowcount
+    elif args.name != None:
+        rowcount = cur.execute("DELETE FROM project WHERE name = ?", (args.name,)).rowcount
+    else:
+        raise Exception('Must specify name or url')
+    print(f'{rowcount} project(s) removed.')
     con.commit()
     con.close()
 
@@ -216,7 +236,12 @@ def main():
     parser_project_fetch.add_argument('--url', required=True)
     parser_project_clone = subparsers_project.add_parser('clone')
     parser_project_clone.set_defaults(func=project_clone)
-    parser_project_clone.add_argument('--name','-n', required=True)
+    parser_project_clone.add_argument('--name','-n', required=False)
+    parser_project_clone.add_argument('--max', type=int, default=1)
+    parser_project_rm = subparsers_project.add_parser('rm')
+    parser_project_rm.set_defaults(func=project_rm)
+    parser_project_rm.add_argument('--name','-n', required=False)
+    parser_project_rm.add_argument('--url', required=False)
 
     parser_credentials = subparsers.add_parser('credentials')
     parser_credentials.set_defaults(func=credentials)

@@ -108,7 +108,7 @@ def clone_project(con, project_id, host, git_https_url):
     if host == 'github':
         m = re_github.match(git_https_url)
         if m == None:
-            raise Exception("Could not recognize github url {git_https_url}")
+            raise Exception(f"Could not recognize github url {git_https_url}")
         owner = m.group(1)
         repo = m.group(2)
         s3_key = f'repos/{date}.github.{owner}.{repo}.tar.gz'
