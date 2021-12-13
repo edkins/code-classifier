@@ -228,6 +228,43 @@ def credentials(args):
     from cc_credentials import enter_credentials
     enter_credentials()
 
+def word_common(args):
+    con = sqlite3.connect(db_name)
+    cur = con.cursor()
+    for row in cur.execute("SELECT word, sum(count) as count, count(*) as projects FROM wordcount GROUP BY word ORDER BY count DESC LIMIT ?", (args.max,)):
+        word, count, projects = row
+        print(f"{word:30} {count:5} {projects:3}")
+    con.close()
+
+def word_popular(args):
+    con = sqlite3.connect(db_name)
+    cur = con.cursor()
+    for row in cur.execute("SELECT word, sum(count) as count, count(*) as projects FROM wordcount GROUP BY word ORDER BY projects DESC, count DESC LIMIT ?", (args.max,)):
+        word, count, projects = row
+        print(f"{word:30} {count:5} {projects:3}")
+    con.close()
+
+def word_prune(args):
+    from cc_analysis import maximum_word_length
+    con = sqlite3.connect(db_name)
+    cur = con.cursor()
+    rowcount = cur.execute("DELETE FROM wordcount WHERE length(word) > ?", (maximum_word_length,)).rowcount
+    print(f"{rowcount} entries removed as too long")
+    con.commit()
+    con.close()
+
+def word_stats(args):
+    con = sqlite3.connect(db_name)
+    cur = con.cursor()
+    for row in cur.execute("SELECT sum(count), count(distinct word), count(distinct analysis_id) FROM wordcount"):
+        count, distinct, projects = row
+        print(f"{count} words, {distinct} distinct words, {projects} projects")
+    for row in cur.execute("SELECT sum(count), count(distinct word), length(word) AS len FROM wordcount GROUP BY length(word) ORDER BY len ASC"):
+        count, distinct, length = row
+        print(f"{count:10} words, {distinct:10} distinct words of length {length}")
+    con.close()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.set_defaults(func=subcommand_required)
@@ -282,6 +319,19 @@ def main():
     parser_project_analyze.set_defaults(func=project_analyze)
     parser_project_analyze.add_argument('--name','-n', required=False)
     parser_project_analyze.add_argument('--max', type=int, default=1)
+
+    parser_word = subparsers.add_parser('word')
+    subparsers_word = parser_word.add_subparsers()
+    parser_word_common = subparsers_word.add_parser('common')
+    parser_word_common.set_defaults(func=word_common)
+    parser_word_common.add_argument('--max', type=int, default=100)
+    parser_word_popular = subparsers_word.add_parser('popular')
+    parser_word_popular.set_defaults(func=word_popular)
+    parser_word_popular.add_argument('--max', type=int, default=100)
+    parser_word_prune = subparsers_word.add_parser('prune')
+    parser_word_prune.set_defaults(func=word_prune)
+    parser_word_stats = subparsers_word.add_parser('stats')
+    parser_word_stats.set_defaults(func=word_stats)
 
     parser_credentials = subparsers.add_parser('credentials')
     parser_credentials.set_defaults(func=credentials)

@@ -3,6 +3,8 @@ from collections import defaultdict
 import os
 import re
 
+maximum_word_length = 40
+
 def list_files_recursive(result, path):
     with os.scandir(path) as it:
         for entry in it:
@@ -31,7 +33,7 @@ def create_analysis(con, project_id, tempdir):
         try:
             with open(filename) as f:
                 for word in re.split("(?<=[a-z])(?=[A-Z])|[^a-zA-Z]+", f.read()):   # split on camelCase and non-alphabetic characters
-                    if len(word) >= 2:
+                    if len(word) >= 2 and len(word) <= maximum_word_length:
                         counts[word.lower()] += 1
                         wordcount += 1
                 filecount += 1
