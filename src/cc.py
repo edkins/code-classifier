@@ -111,10 +111,24 @@ def project_ls(args):
     con = sqlite3.connect(db_name)
     cur = con.cursor()
     count = 0
-    for row in cur.execute("SELECT name, metadata_status, metadata_date, code_url FROM project ORDER BY name ASC, code_url ASC"):
-        name, metadata_status, metadata_date, code_url = row
-        print(f'{str(name):20} {str(metadata_status):4} {str(metadata_date):25} {code_url}')
-        count += 1
+    if args.priority:
+        for row in cur.execute("""
+SELECT name, update_date, size, code_url
+FROM project
+WHERE
+    metadata_status = 200
+    AND public = true
+    AND is_fork = false
+    AND fetch_date is null
+ORDER BY update_date DESC, size ASC"""):
+            name, update_date, size, code_url = row
+            print(f'{str(name):20} {str(update_date):25} {size:15} {code_url}')
+            count += 1
+    else:
+        for row in cur.execute("SELECT name, metadata_status, metadata_date, fetch_date, code_url FROM project ORDER BY name ASC, code_url ASC"):
+            name, metadata_status, metadata_date, fetch_date, code_url = row
+            print(f'{str(name):20} {str(metadata_status):4} {str(metadata_date):25} {str(fetch_date):25} {code_url}')
+            count += 1
     print(f'{count} results.')
 
 def project_fetch(args):
@@ -125,6 +139,30 @@ def project_fetch(args):
         raise Exception(f"Cannot identify code host for url {code_url}")
     con = sqlite3.connect(db_name)
     fetch_project(con, host, code_url, refetch=True)
+    con.close()
+
+def project_clone(args):
+    from cc_project import clone_project
+    project_id = None
+    host = None
+    git_https_url = None
+    con = sqlite3.connect(db_name)
+    cur = con.cursor()
+    for row in cur.execute("SELECT id, host, git_https FROM project WHERE name = ?", (args.name,)):
+        if project_id != None:
+            raise Exception(f"Multiple projects with name {name}")
+        project_id, host, git_https_url = row
+    if project_id == None or host == None or git_https_url == None:
+        raise Exception(f"Could not find info on project {name}")
+    date, sha, location = clone_project(con, project_id, host, git_https_url)
+    cur.execute("""
+UPDATE project
+SET fetch_date = ?,
+    fetch_sha = ?,
+    fetch_location = ?
+WHERE id = ?
+""", (date, sha, location, project_id))
+    con.commit()
     con.close()
 
 def subcommand_required(args):
@@ -172,9 +210,13 @@ def main():
     subparsers_project = parser_project.add_subparsers()
     parser_project_ls = subparsers_project.add_parser('ls')
     parser_project_ls.set_defaults(func=project_ls)
+    parser_project_ls.add_argument('--priority', action='store_true')
     parser_project_fetch = subparsers_project.add_parser('fetch')
     parser_project_fetch.set_defaults(func=project_fetch)
     parser_project_fetch.add_argument('--url', required=True)
+    parser_project_clone = subparsers_project.add_parser('clone')
+    parser_project_clone.set_defaults(func=project_clone)
+    parser_project_clone.add_argument('--name','-n', required=True)
 
     parser_credentials = subparsers.add_parser('credentials')
     parser_credentials.set_defaults(func=credentials)

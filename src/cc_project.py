@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import re
 
-re_github = re.compile(r'https:\/\/github.com\/([-_a-zA-Z]+)\/([-_a-zA-Z]+)')
+re_github = re.compile(r'^https:\/\/github.com\/([-_a-zA-Z]+)\/([-_a-zA-Z]+)$')
 
 def now_as_string():
     return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -99,3 +99,19 @@ WHERE
     ).rowcount
     print(f'{rowcount} project metadata updated')
     con.commit()
+
+def clone_project(con, project_id, host, git_https_url):
+    from cc_credentials import get_s3_bucket
+    from cc_github import github_clone_repo
+    date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    s3_bucket = get_s3_bucket()
+    if host == 'github':
+        m = re_github.match(git_https_url)
+        if m == None:
+            raise Exception("Could not recognize github url {git_https_url}")
+        owner = m.group(1)
+        repo = m.group(2)
+        s3_key = f'repos/{date}.github.{owner}.{repo}.tar.gz'
+        sha = github_clone_repo(con, git_https_url, s3_bucket, s3_key)
+    date = now_as_string()
+    return date, sha, f's3://{s3_bucket}/{s3_key}'

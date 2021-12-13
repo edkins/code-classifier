@@ -25,6 +25,10 @@ def enter_credentials():
         datetime.strptime(github_expiry, '%Y-%m-%d')
         credentials['github_expiry'] = github_expiry
 
+    s3_bucket = input(f"S3 Bucket ({credentials.get('s3_bucket')}): ")
+    if s3_bucket != '':
+        credentials['s3_bucket'] = s3_bucket
+
     with open(credentials_filename, 'w') as f:
         json.dump(credentials, f, indent=4)
         print(f"Written {credentials_filename}")
@@ -35,3 +39,12 @@ def get_github_credentials():
         if datetime.strptime(credentials['github_expiry'], '%Y-%m-%d') <= datetime.now():
             raise Exception('github credentials have expired')
         return credentials['github_username'], credentials['github_access_token']
+
+def get_s3_bucket():
+    with open(credentials_filename) as f:
+        credentials = json.load(f)
+        bucket = credentials['s3_bucket']
+        if bucket == None:
+            raise Exception('No s3 bucket defined')
+        return bucket
+
