@@ -150,7 +150,7 @@ def project_clone(args):
         for row in cur.execute("SELECT id, host, git_https FROM project WHERE name = ? LIMIT ?", (args.name,args.max)):
             projects.append(list(row))
     else:
-        for row in cur.execute("SELECT id, host, git_https FROM project WHERE metadata_status = 200 AND public = true AND is_fork = false AND fetch_date is null ORDER BY update_date DESC"):
+        for row in cur.execute("SELECT id, host, git_https FROM project WHERE metadata_status = 200 AND public = true AND is_fork = false AND fetch_date is null ORDER BY update_date DESC LIMIT ?", (args.max,)):
             projects.append(list(row))
 
     if len(projects) == 0:
@@ -171,6 +171,42 @@ def project_clone(args):
         count += 1
     print(f'{count} project(s) cloned.')
     con.close()
+
+def project_analyze(args):
+    from cc_analysis import create_analysis
+    from cc_credentials import get_s3_bucket
+    from cc_recover import recover_repo
+    from tempfile import TemporaryDirectory
+    projects = []
+    con = sqlite3.connect(db_name)
+    cur = con.cursor()
+    if args.name != None:
+        for row in cur.execute("SELECT id, fetch_location FROM project WHERE name = ? LIMIT ?", (args.name,args.max)):
+            projects.append(list(row))
+    else:
+        for row in cur.execute("""
+            SELECT id, fetch_location
+            FROM project
+            WHERE
+                fetch_location is not null
+            ORDER BY fetch_date ASC
+            LIMIT ?
+        """, (args.max,)):
+            projects.append(list(row))
+
+    if len(projects) == 0:
+        print('No projects matched criteria.')
+        return
+
+    s3_bucket = get_s3_bucket()
+    count = 0
+    for project_id, s3_url in projects:
+        with TemporaryDirectory() as tempdir:
+            recover_repo(s3_bucket, s3_url, tempdir, keep_git=False)
+            create_analysis(con, project_id, tempdir)
+            count += 1
+    print(f'{count} project(s) analyzed.')
+
 
 def project_rm(args):
     con = sqlite3.connect(db_name)
@@ -242,6 +278,10 @@ def main():
     parser_project_rm.set_defaults(func=project_rm)
     parser_project_rm.add_argument('--name','-n', required=False)
     parser_project_rm.add_argument('--url', required=False)
+    parser_project_analyze = subparsers_project.add_parser('analyze')
+    parser_project_analyze.set_defaults(func=project_analyze)
+    parser_project_analyze.add_argument('--name','-n', required=False)
+    parser_project_analyze.add_argument('--max', type=int, default=1)
 
     parser_credentials = subparsers.add_parser('credentials')
     parser_credentials.set_defaults(func=credentials)
