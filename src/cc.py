@@ -265,6 +265,79 @@ def word_stats(args):
     con.close()
 
 
+def topic_extract(args):
+    from scipy.sparse import csr_matrix
+    from sklearn.decomposition import NMF
+    from sklearn.feature_extraction.text import TfidfTransformer
+    import numpy as np
+    max_distinct_words = args.features
+    n_topics = args.topics
+
+    stop_words = set([
+        'and', 'as', 'class', 'def',
+        'err', 'for', 'from', 'get',
+        'id', 'if', 'import', 'in', 'int', 'is',
+        'let', 'my', 'name', 'nil', 'none', 'not', 'null',
+        'of', 'on', 'or', 'return',
+        'self', 'span', 'string', 'that',
+        'the', 'this', 'to', 'true', 'type',
+        'val', 'var', 'with', 'you',
+    ])
+
+    con = sqlite3.connect(db_name)
+    cur = con.cursor()
+    word_to_index = {}
+    feature_names = []
+    for row in cur.execute("SELECT word, sum(count) as count FROM wordcount GROUP BY word ORDER BY count DESC, word ASC LIMIT ?", (max_distinct_words + len(stop_words),)):
+        word, count = row
+        if word not in stop_words:
+            word_to_index[word] = len(word_to_index)
+            feature_names.append(word)
+    n_features = len(word_to_index)
+    print(f"n_features = {n_features}")
+
+    analysis_to_index = {}
+    analyses = []
+    for row in cur.execute("SELECT project.id, project.name, analysis.id FROM project INNER JOIN analysis ON project.id = analysis.project_id"):
+        project_id, project_name, analysis_id = row
+        index = len(analysis_to_index)
+        analysis_to_index[analysis_id] = index
+        analyses.append({"project_id":project_id, "name":project_name, "analysis_id":analysis_id})
+    n = len(analysis_to_index)
+    print(f"n = {n}")
+
+    print("Constructing data arrays")
+    rows = []
+    cols = []
+    data = []
+    for row in cur.execute("SELECT word, count, analysis_id FROM wordcount"):
+        word, count, analysis_id = row
+        if word in word_to_index:
+            rows.append(analysis_to_index[analysis_id])
+            cols.append(word_to_index[word])
+            data.append(count)
+
+    print("Constructing csr_matrix")
+    count_matrix = csr_matrix((data, (rows,cols)), shape=(n, n_features), dtype=np.int64)
+
+    print("Transforming count matrix to td-idf")
+    X = TfidfTransformer().fit_transform(count_matrix)
+
+    print("Performing NMF")
+    nmf = NMF(n_topics)
+    transformed = nmf.fit_transform(X)
+    for i in range(n_topics):
+        topic_string = ''
+        indices = list(range(n_features))
+        indices.sort(key=lambda j: nmf.components_[i,j], reverse=True)
+        for j in range(min(20, n_features)):
+            topic_string += ' ' + feature_names[indices[j]]
+        print(topic_string)
+
+    con.close()
+
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.set_defaults(func=subcommand_required)
@@ -332,6 +405,13 @@ def main():
     parser_word_prune.set_defaults(func=word_prune)
     parser_word_stats = subparsers_word.add_parser('stats')
     parser_word_stats.set_defaults(func=word_stats)
+
+    parser_topic = subparsers.add_parser('topic')
+    subparsers_topic = parser_topic.add_subparsers()
+    parser_topic_extract = subparsers_topic.add_parser('extract')
+    parser_topic_extract.set_defaults(func=topic_extract)
+    parser_topic_extract.add_argument('--features', type=int, default=100000)
+    parser_topic_extract.add_argument('--topics', type=int, default=20)
 
     parser_credentials = subparsers.add_parser('credentials')
     parser_credentials.set_defaults(func=credentials)
