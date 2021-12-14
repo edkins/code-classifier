@@ -34,7 +34,7 @@ def create_analysis(con, project_id, tempdir):
             with open(filename) as f:
                 for word in re.split("(?<=[a-z])(?=[A-Z])|[^a-zA-Z]+", f.read()):   # split on camelCase and non-alphabetic characters
                     if len(word) >= 2 and len(word) <= maximum_word_length:
-                        counts[word.lower()] += 1
+                        counts[(word.lower(), filecount)] += 1
                         wordcount += 1
                 filecount += 1
 
@@ -43,7 +43,7 @@ def create_analysis(con, project_id, tempdir):
     print(f"Read {filecount} files, {errorcount} errors, {wordcount} words, {len(counts)} distinct words")
     cur.execute("INSERT INTO analysis(project_id) VALUES (?)", (project_id,))
     analysis_id = cur.lastrowid
-    cur.executemany("INSERT INTO wordcount(analysis_id, word, count) VALUES (?,?,?)", ((analysis_id, word, count) for (word,count) in counts.items()))
+    cur.executemany("INSERT INTO wordcount(analysis_id, word, file_number, count) VALUES (?,?,?,?)", ((analysis_id, word, file_number, count) for ((word,file_number),count) in counts.items()))
     con.commit()
 
     cur.executemany("DELETE FROM wordcount WHERE analysis_id = ?", ((prev_id,) for prev_id in prev_ids))

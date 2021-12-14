@@ -256,9 +256,9 @@ def word_prune(args):
 def word_stats(args):
     con = sqlite3.connect(db_name)
     cur = con.cursor()
-    for row in cur.execute("SELECT sum(count), count(distinct word), count(distinct analysis_id) FROM wordcount"):
-        count, distinct, projects = row
-        print(f"{count} words, {distinct} distinct words, {projects} projects")
+    for row in cur.execute("SELECT sum(count), count(distinct word), count(distinct analysis_id * 1000000 + file_number), count(distinct analysis_id) FROM wordcount"):
+        count, distinct, files, projects = row
+        print(f"{count} words, {distinct} distinct words, {files} files, {projects} projects")
     for row in cur.execute("SELECT sum(count), count(distinct word), length(word) AS len FROM wordcount GROUP BY length(word) ORDER BY len ASC"):
         count, distinct, length = row
         print(f"{count:10} words, {distinct:10} distinct words of length {length}")
@@ -267,7 +267,7 @@ def word_stats(args):
 
 def topic_extract(args):
     from scipy.sparse import csr_matrix
-    from sklearn.decomposition import NMF
+    from sklearn.decomposition import NMF, LatentDirichletAllocation
     from sklearn.feature_extraction.text import TfidfTransformer
     import numpy as np
     max_distinct_words = args.features
@@ -286,53 +286,85 @@ def topic_extract(args):
 
     con = sqlite3.connect(db_name)
     cur = con.cursor()
+
+    for row in cur.execute("SELECT count(distinct analysis_id) FROM wordcount"):
+        num_analyses, = row
+
     word_to_index = {}
+    word_num_analyses = {}
     feature_names = []
-    for row in cur.execute("SELECT word, sum(count) as count FROM wordcount GROUP BY word ORDER BY count DESC, word ASC LIMIT ?", (max_distinct_words + len(stop_words),)):
-        word, count = row
+    for row in cur.execute("""
+SELECT word, sum(count) as count, count(distinct analysis_id) as d
+FROM wordcount
+GROUP BY word
+HAVING d >= 2 AND d <= ?
+ORDER BY count DESC, word ASC
+LIMIT ?""", (int(0.95 * num_analyses), max_distinct_words)):
+        word, count, num_analyses = row
         if word not in stop_words:
             word_to_index[word] = len(word_to_index)
+            word_num_analyses[word] = num_analyses
             feature_names.append(word)
     n_features = len(word_to_index)
     print(f"n_features = {n_features}")
 
-    analysis_to_index = {}
-    analyses = []
-    for row in cur.execute("SELECT project.id, project.name, analysis.id FROM project INNER JOIN analysis ON project.id = analysis.project_id"):
-        project_id, project_name, analysis_id = row
-        index = len(analysis_to_index)
-        analysis_to_index[analysis_id] = index
-        analyses.append({"project_id":project_id, "name":project_name, "analysis_id":analysis_id})
-    n = len(analysis_to_index)
-    print(f"n = {n}")
-
-    print("Constructing data arrays")
+    file_indices = {}
     rows = []
     cols = []
     data = []
-    for row in cur.execute("SELECT word, count, analysis_id FROM wordcount"):
-        word, count, analysis_id = row
-        if word in word_to_index:
-            rows.append(analysis_to_index[analysis_id])
-            cols.append(word_to_index[word])
-            data.append(count)
+
+    if args.files:
+        for row in cur.execute("SELECT analysis_id, file_number, sum(count) as c FROM wordcount GROUP BY analysis_id, file_number HAVING c >= 100"):
+            analysis_id, file_number, _count = row
+            file_indices[(analysis_id, file_number)] = len(file_indices)
+        n = len(file_indices)
+        print(f"n = {n}")
+
+        print("Constructing data arrays")
+        for row in cur.execute("SELECT word, count, analysis_id, file_number FROM wordcount"):
+            word, count, analysis_id, file_number = row
+            if word in word_to_index and (analysis_id, file_number) in file_indices:
+                rows.append(file_indices[(analysis_id, file_number)])
+                cols.append(word_to_index[word])
+                data.append(count)
+    else:
+        for row in cur.execute("SELECT analysis_id FROM wordcount GROUP BY analysis_id"):
+            analysis_id, = row
+            file_indices[analysis_id] = len(file_indices)
+        n = len(file_indices)
+        print(f"n = {n}")
+
+        print("Constructing data arrays")
+        for row in cur.execute("SELECT word, count, analysis_id FROM wordcount"):
+            word, count, analysis_id = row
+            if word in word_to_index and analysis_id in file_indices:
+                rows.append(file_indices[analysis_id])
+                cols.append(word_to_index[word])
+                data.append(count)
 
     print("Constructing csr_matrix")
     count_matrix = csr_matrix((data, (rows,cols)), shape=(n, n_features), dtype=np.int64)
 
-    print("Transforming count matrix to td-idf")
-    X = TfidfTransformer().fit_transform(count_matrix)
+    if args.lda:
+        print("Performing LDA")
+        model = LatentDirichletAllocation(n_topics, verbose=2)
+        transformed = model.fit_transform(count_matrix)
+    else:
+        print("Transforming count matrix to td-idf")
+        X = TfidfTransformer().fit_transform(count_matrix)
 
-    print("Performing NMF")
-    nmf = NMF(n_topics)
-    transformed = nmf.fit_transform(X)
+        print("Performing NMF")
+        model = NMF(n_topics, solver='mu', beta_loss='kullback-leibler')
+        transformed = model.fit_transform(X)
     for i in range(n_topics):
-        topic_string = ''
+        print(f"==== topic {i} ====")
         indices = list(range(n_features))
-        indices.sort(key=lambda j: nmf.components_[i,j], reverse=True)
+        indices.sort(key=lambda j: model.components_[i,j], reverse=True)
         for j in range(min(20, n_features)):
-            topic_string += ' ' + feature_names[indices[j]]
-        print(topic_string)
+            word = feature_names[indices[j]]
+            num_analyses = word_num_analyses.get(word)
+            print(f"    {word:20}({num_analyses})   {model.components_[i,indices[j]]}")
+        print()
 
     con.close()
 
@@ -412,6 +444,8 @@ def main():
     parser_topic_extract.set_defaults(func=topic_extract)
     parser_topic_extract.add_argument('--features', type=int, default=100000)
     parser_topic_extract.add_argument('--topics', type=int, default=20)
+    parser_topic_extract.add_argument('--lda', action='store_true')
+    parser_topic_extract.add_argument('--files', action='store_true')
 
     parser_credentials = subparsers.add_parser('credentials')
     parser_credentials.set_defaults(func=credentials)
