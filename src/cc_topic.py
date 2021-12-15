@@ -2,8 +2,12 @@ def topic_extract(args):
     from scipy.sparse import csr_matrix
     from sklearn.decomposition import NMF, LatentDirichletAllocation
     from sklearn.feature_extraction.text import TfidfTransformer
+    from collections import defaultdict
+    import math
     import numpy as np
     import sqlite3
+    from cc import db_name
+
     max_distinct_words = args.features
     n_topics = args.topics
 
@@ -47,10 +51,12 @@ LIMIT ?""", (int(0.95 * num_analyses), max_distinct_words)):
     cols = []
     data = []
 
-    if args.files:
+    if args.files or args.filenorm:
+        file_counts = defaultdict(int)
         for row in cur.execute("SELECT analysis_id, file_number, sum(count) as c FROM wordcount GROUP BY analysis_id, file_number HAVING c >= 100"):
             analysis_id, file_number, _count = row
             file_indices[(analysis_id, file_number)] = len(file_indices)
+            file_counts[analysis_id] += 1
         n = len(file_indices)
         print(f"n = {n}")
 
@@ -60,7 +66,11 @@ LIMIT ?""", (int(0.95 * num_analyses), max_distinct_words)):
             if word in word_to_index and (analysis_id, file_number) in file_indices:
                 rows.append(file_indices[(analysis_id, file_number)])
                 cols.append(word_to_index[word])
-                data.append(count)
+                if args.filenorm:
+                    data.append(math.log(10 + count) / math.sqrt(file_counts[analysis_id]))
+                    #data.append(1 / math.sqrt(file_counts[analysis_id]))
+                else:
+                    data.append(count)
     else:
         for row in cur.execute("SELECT analysis_id FROM wordcount GROUP BY analysis_id"):
             analysis_id, = row
@@ -77,18 +87,24 @@ LIMIT ?""", (int(0.95 * num_analyses), max_distinct_words)):
                 data.append(count)
 
     print("Constructing csr_matrix")
-    count_matrix = csr_matrix((data, (rows,cols)), shape=(n, n_features), dtype=np.int64)
+    count_matrix = csr_matrix((data, (rows,cols)), shape=(n, n_features), dtype=np.float32)
 
     if args.lda:
         print("Performing LDA")
         model = LatentDirichletAllocation(n_topics, verbose=2)
         transformed = model.fit_transform(count_matrix)
     else:
-        print("Transforming count matrix to td-idf")
-        X = TfidfTransformer().fit_transform(count_matrix)
+        if args.filenorm:
+            X = count_matrix
+        else:
+            print("Transforming count matrix to td-idf")
+            X = TfidfTransformer().fit_transform(count_matrix)
 
         print("Performing NMF")
-        model = NMF(n_topics, solver='mu', beta_loss='kullback-leibler')
+        if args.kl:
+            model = NMF(n_topics, solver='mu', beta_loss='kullback-leibler', verbose=2)
+        else:
+            model = NMF(n_topics, verbose=2)
         transformed = model.fit_transform(X)
     for i in range(n_topics):
         print(f"==== topic {i} ====")
@@ -108,6 +124,7 @@ def topic_tsne(args):
     from sklearn.decomposition import TruncatedSVD
     from sklearn.preprocessing import normalize
     from sklearn.manifold import TSNE
+    from collections import defaultdict
     import json
     import math
     import numpy as np
@@ -122,6 +139,11 @@ def topic_tsne(args):
     word_names = []
     word_counts = []
 
+    file_indices = {}
+    rows = []
+    cols = []
+    data = []
+
     for row in cur.execute("SELECT word, count(distinct analysis_id) as analyses, sum(count) as count FROM wordcount GROUP BY word ORDER BY analyses DESC, count DESC, word ASC LIMIT ?", (max_distinct_words,)):
         word, _analyses, count = row
         word_to_index[word] = len(word_to_index)
@@ -130,38 +152,65 @@ def topic_tsne(args):
     n = len(word_to_index)
     print(f"n = {n}")
 
-    file_indices = {}
-    rows = []
-    cols = []
-    data = []
+    if args.project:
+        for row in cur.execute("SELECT analysis_id FROM wordcount GROUP BY analysis_id"):
+            analysis_id, = row
+            file_indices[analysis_id] = len(file_indices)
+        n_features = len(file_indices)
+        print(f"n_features = {n_features}")
 
-    for row in cur.execute("SELECT analysis_id, file_number FROM wordcount GROUP BY analysis_id, file_number"):
-        analysis_id, file_number = row
-        file_indices[(analysis_id, file_number)] = len(file_indices)
-    n_features = len(file_indices)
-    print(f"n_features = {n_features}")
+        print("Constructing data arrays")
+        for row in cur.execute("SELECT word, sum(count) as c, analysis_id FROM wordcount GROUP BY word, analysis_id"):
+            word, count, analysis_id = row
+            if word in word_to_index and analysis_id in file_indices:
+                rows.append(word_to_index[word])
+                cols.append(file_indices[analysis_id])
+                if args.counts:
+                    data.append(count)
+                elif args.log:
+                    data.append(math.log(1 + count, 10))
+                elif args.loglog:
+                    data.append(math.log(math.log(3 + count)))
+                else:
+                    data.append(1)
+    else:
+        file_counts = defaultdict(int)
+        for row in cur.execute("SELECT analysis_id, file_number FROM wordcount GROUP BY analysis_id, file_number"):
+            analysis_id, file_number = row
+            file_indices[(analysis_id, file_number)] = len(file_indices)
+            file_counts[analysis_id] += 1
+        n_features = len(file_indices)
+        print(f"n_features = {n_features}")
 
-    print("Constructing data arrays")
-    for row in cur.execute("SELECT word, count, analysis_id, file_number FROM wordcount"):
-        word, count, analysis_id, file_number = row
-        if word in word_to_index and (analysis_id, file_number) in file_indices:
-            rows.append(word_to_index[word])
-            cols.append(file_indices[(analysis_id, file_number)])
-            if args.counts:
-                data.append(count)
-            elif args.log:
-                data.append(math.log(1 + count))
-            else:
-                data.append(1)
+        print("Constructing data arrays")
+        for row in cur.execute("SELECT word, count, analysis_id, file_number FROM wordcount"):
+            word, count, analysis_id, file_number = row
+            if word in word_to_index and (analysis_id, file_number) in file_indices:
+                rows.append(word_to_index[word])
+                cols.append(file_indices[(analysis_id, file_number)])
+                if args.counts:
+                    data.append(count)
+                elif args.log:
+                    if args.filenorm:
+                        data.append(math.log(1 + count) / file_counts[analysis_id])
+                    else:
+                        data.append(math.log(1 + count))
+                elif args.filenorm:
+                    data.append(1 / file_counts[analysis_id])
+                else:
+                    data.append(1)
 
     print("Constructing csr_matrix")
-    count_matrix = csr_matrix((data, (rows,cols)), shape=(n, n_features), dtype=np.int64)
+    count_matrix = csr_matrix((data, (rows,cols)), shape=(n, n_features), dtype=np.float32)
 
     print("Normalizing")
     X = count_matrix #normalize(count_matrix, norm='l1')
 
-    print("Truncated SVD")
-    X_reduced = TruncatedSVD(args.intermediate).fit_transform(X)
+    if args.intermediate < n_features:
+        print("Truncated SVD")
+        X_reduced = TruncatedSVD(args.intermediate).fit_transform(X)
+    else:
+        X_reduced = X
 
     print("TSNE")
     model = TSNE(n_components=2, perplexity=args.perplexity, verbose=2)
