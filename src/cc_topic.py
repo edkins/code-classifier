@@ -21,9 +21,15 @@ def topic_extract(args):
         'the', 'this', 'to', 'true', 'type',
         'val', 'var', 'with', 'you',
     ])
+    stop_words = set()
 
     con = sqlite3.connect(db_name)
     cur = con.cursor()
+
+    analysis_info = {}
+    for row in cur.execute("SELECT analysis.id, project.name FROM analysis JOIN project ON analysis.project_id = project.id"):
+        analysis_id, project_name = row
+        analysis_info[analysis_id] = {'name':project_name}
 
     for row in cur.execute("SELECT count(distinct analysis_id) FROM wordcount"):
         num_analyses, = row
@@ -37,7 +43,7 @@ FROM wordcount
 GROUP BY word
 HAVING d >= 2 AND d <= ?
 ORDER BY count DESC, word ASC
-LIMIT ?""", (int(0.95 * num_analyses), max_distinct_words)):
+LIMIT ?""", (int(1.95 * num_analyses), max_distinct_words)):
         word, count, num_analyses = row
         if word not in stop_words:
             word_to_index[word] = len(word_to_index)
@@ -53,10 +59,15 @@ LIMIT ?""", (int(0.95 * num_analyses), max_distinct_words)):
 
     if args.files or args.filenorm:
         file_counts = defaultdict(int)
+        word_counts = defaultdict(int)
+        item_analysis_id = []
         for row in cur.execute("SELECT analysis_id, file_number, sum(count) as c FROM wordcount GROUP BY analysis_id, file_number HAVING c >= 100"):
-            analysis_id, file_number, _count = row
-            file_indices[(analysis_id, file_number)] = len(file_indices)
+            analysis_id, file_number, count = row
+            item = len(file_indices)
+            file_indices[(analysis_id, file_number)] = item
             file_counts[analysis_id] += 1
+            word_counts[analysis_id] += count
+            item_analysis_id.append(analysis_id)
         n = len(file_indices)
         print(f"n = {n}")
 
@@ -67,10 +78,11 @@ LIMIT ?""", (int(0.95 * num_analyses), max_distinct_words)):
                 rows.append(file_indices[(analysis_id, file_number)])
                 cols.append(word_to_index[word])
                 if args.filenorm:
-                    data.append(math.log(10 + count) / math.sqrt(file_counts[analysis_id]))
-                    #data.append(1 / math.sqrt(file_counts[analysis_id]))
+                    #data.append(math.log(10 + count) / math.sqrt(file_counts[analysis_id]))
+                    data.append(1 / math.sqrt(file_counts[analysis_id]))
+                    #data.append(math.pow(file_counts[analysis_id], -0.25))
                 else:
-                    data.append(count)
+                    data.append(1)
     else:
         for row in cur.execute("SELECT analysis_id FROM wordcount GROUP BY analysis_id"):
             analysis_id, = row
@@ -94,7 +106,7 @@ LIMIT ?""", (int(0.95 * num_analyses), max_distinct_words)):
         model = LatentDirichletAllocation(n_topics, verbose=2)
         transformed = model.fit_transform(count_matrix)
     else:
-        if args.filenorm:
+        if args.filenorm or args.files:
             X = count_matrix
         else:
             print("Transforming count matrix to td-idf")
@@ -106,15 +118,35 @@ LIMIT ?""", (int(0.95 * num_analyses), max_distinct_words)):
         else:
             model = NMF(n_topics, verbose=2)
         transformed = model.fit_transform(X)
+
+    topic_summaries = []
     for i in range(n_topics):
         print(f"==== topic {i} ====")
         indices = list(range(n_features))
         indices.sort(key=lambda j: model.components_[i,j], reverse=True)
-        for j in range(min(20, n_features)):
+        for j in range(min(50, n_features)):
             word = feature_names[indices[j]]
             num_analyses = word_num_analyses.get(word)
             print(f"    {word:20}({num_analyses})   {model.components_[i,indices[j]]}")
+
+        topic_summary = ''
+        for j in range(min(3, n_features)):
+            word = feature_names[indices[j]]
+            topic_summary += ' ' + word
+        topic_summaries.append(topic_summary)
+
         print()
+
+    if args.files or args.filenorm:
+        sum_vecs = defaultdict(lambda:np.zeros((n_topics,)))
+        for item in range(n):
+            analysis_id = item_analysis_id[item]
+            sum_vecs[analysis_id] += transformed[item,:]
+
+        for analysis_id, vec in sum_vecs.items():
+            print(analysis_info[analysis_id])
+            for i in sorted(range(n_topics), key=lambda i:vec[i], reverse=True)[:6]:
+                print(vec[i], topic_summaries[i])
 
     con.close()
 
