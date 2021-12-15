@@ -58,8 +58,15 @@ def main():
     if not os.path.exists(config_file):
         create_config_file()
     ssh_profile = get_ssh_profile()
-    do_rsync(ssh_profile)
-    do_remote_code_classification(ssh_profile, sys.argv[1:])
+    if sys.argv[1:] == ['visualize','pyplot']:
+        from visualization.visualize import do_visualization
+        do_visualization(ssh_profile)
+    elif sys.argv[1:] == ['visualize','html']:
+        from visualization.visualize import make_html
+        make_html(ssh_profile)
+    else:
+        do_rsync(ssh_profile)
+        do_remote_code_classification(ssh_profile, sys.argv[1:])
 
 if __name__ == '__main__':
     main()
