@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from time import sleep
 from tempfile import TemporaryDirectory, NamedTemporaryFile
+import os.path
 import re
 import requests
 import subprocess
@@ -79,7 +80,7 @@ def github_get_repo(con, owner, repo):
     finally:
         _after_request(con, requests_remaining, 'github-rest')
 
-def github_clone_repo(con, git_https_url, s3_bucket, s3_key):
+def github_clone_repo(con, git_https_url, s3_bucket, s3_key, max_size):
     import boto3
     username, access_token, requests_remaining = _before_request(con, 'github-git')
     try:
@@ -93,9 +94,14 @@ def github_clone_repo(con, git_https_url, s3_bucket, s3_key):
             with NamedTemporaryFile(suffix='.tar.gz') as tarfile:
                 print(f"Tarring {tarfile.name}")
                 subprocess.run(['tar','--create','--file',tarfile.name,'--gzip','-C',tempdir,'.git'])
-                print(f"Writing to s3://{s3_bucket}/{s3_key}")
-                s3 = boto3.client('s3')
-                s3.upload_file(tarfile.name, s3_bucket, s3_key)
-                return sha
+                actual_size = os.path.getsize(tarfile.name)
+                if actual_size > max_size:
+                    print(f"{tarfile.name} is too big: {actual_size})")
+                    return None
+                else:
+                    print(f"Writing to s3://{s3_bucket}/{s3_key}")
+                    s3 = boto3.client('s3')
+                    s3.upload_file(tarfile.name, s3_bucket, s3_key)
+                    return sha
     finally:
         _after_request(con, None, 'github-git')

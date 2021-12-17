@@ -87,6 +87,23 @@ def listing_fetch(args):
             fetched += 1
     print(f'{seen} seen. {fetched} fetched. {seen-fetched} skipped.')
 
+def listing_select(args):
+    con = sqlite3.connect(db_name)
+    cur = con.cursor()
+    listing_id = None
+    for row in cur.execute("select id from listing where name=?", (args.name,)):
+        listing_id, = row
+    if listing_id == None:
+        raise Exception('No such listing')
+    urls = []
+    for row in cur.execute("SELECT url FROM listing_elem WHERE listing_id = ?", (listing_id,)):
+        url, = row
+        urls.append((url,))
+
+    cur.executemany("UPDATE project SET selected=true WHERE code_url = ?", urls)
+    con.commit()
+    con.close()
+
 def listing_get(args):
     con = sqlite3.connect(db_name)
     cur = con.cursor()
@@ -121,14 +138,16 @@ WHERE
     AND public = true
     AND is_fork = false
     AND fetch_date is null
+    AND selected = true
 ORDER BY update_date DESC, size ASC"""):
             name, update_date, size, code_url = row
             print(f'{str(name):20} {str(update_date):25} {size:15} {code_url}')
             count += 1
     else:
-        for row in cur.execute("SELECT name, metadata_status, metadata_date, fetch_date, code_url FROM project ORDER BY name ASC, code_url ASC"):
-            name, metadata_status, metadata_date, fetch_date, code_url = row
-            print(f'{str(name):20} {str(metadata_status):4} {str(metadata_date):25} {str(fetch_date):25} {code_url}')
+        for row in cur.execute("SELECT name, metadata_status, metadata_date, fetch_date, code_url, selected FROM project ORDER BY name ASC, code_url ASC"):
+            name, metadata_status, metadata_date, fetch_date, code_url, selected = row
+            star = '*' if selected else ' '
+            print(f'{star} {str(name):20} {str(metadata_status):4} {str(metadata_date):25} {str(fetch_date):25} {code_url}')
             count += 1
     print(f'{count} results.')
 
@@ -151,7 +170,7 @@ def project_clone(args):
         for row in cur.execute("SELECT id, host, git_https FROM project WHERE name = ? LIMIT ?", (args.name,args.max)):
             projects.append(list(row))
     else:
-        for row in cur.execute("SELECT id, host, git_https FROM project WHERE metadata_status = 200 AND public = true AND is_fork = false AND fetch_date is null ORDER BY update_date DESC LIMIT ?", (args.max,)):
+        for row in cur.execute("SELECT id, host, git_https FROM project WHERE metadata_status = 200 AND public = true AND is_fork = false AND fetch_date is null AND selected = true ORDER BY update_date DESC LIMIT ?", (args.max,)):
             projects.append(list(row))
 
     if len(projects) == 0:
@@ -161,15 +180,16 @@ def project_clone(args):
     count = 0
     for (project_id, host, git_https_url) in projects:
         date, sha, location = clone_project(con, project_id, host, git_https_url)
-        cur.execute("""
-    UPDATE project
-    SET fetch_date = ?,
-        fetch_sha = ?,
-        fetch_location = ?
-    WHERE id = ?
-    """, (date, sha, location, project_id))
-        con.commit()
-        count += 1
+        if sha != None:
+            cur.execute("""
+        UPDATE project
+        SET fetch_date = ?,
+            fetch_sha = ?,
+            fetch_location = ?
+        WHERE id = ?
+        """, (date, sha, location, project_id))
+            con.commit()
+            count += 1
     print(f'{count} project(s) cloned.')
     con.close()
 
@@ -190,6 +210,7 @@ def project_analyze(args):
             FROM project
             WHERE
                 fetch_location is not null
+                AND selected = true
             ORDER BY fetch_date ASC
             LIMIT ?
         """, (args.max,)):
@@ -204,7 +225,7 @@ def project_analyze(args):
     for project_id, s3_url in projects:
         with TemporaryDirectory() as tempdir:
             recover_repo(s3_bucket, s3_url, tempdir, keep_git=False)
-            create_analysis(con, project_id, tempdir)
+            create_analysis(con, project_id, tempdir, args.extension)
             count += 1
     print(f'{count} project(s) analyzed.')
 
@@ -221,6 +242,14 @@ def project_rm(args):
     print(f'{rowcount} project(s) removed.')
     con.commit()
     con.close()
+
+def project_deselect(args):
+    con = sqlite3.connect(db_name)
+    cur = con.cursor()
+    cur.execute("UPDATE project SET selected = false")
+    con.commit()
+    con.close()
+
 
 def subcommand_required(args):
     raise Exception('Subcommand required')
@@ -265,6 +294,17 @@ def word_stats(args):
         print(f"{count:10} words, {distinct:10} distinct words of length {length}")
     con.close()
 
+def word_rm(args):
+    if args.all:
+        con = sqlite3.connect(db_name)
+        cur = con.cursor()
+        rowcount = cur.execute("DELETE FROM wordcount").rowcount
+        print(f"{rowcount} entries removed from wordcount")
+        rowcount = cur.execute("DELETE FROM analysis").rowcount
+        print(f"{rowcount} entries removed from analysis")
+        con.commit()
+        con.close()
+
 def main():
     parser = argparse.ArgumentParser()
     parser.set_defaults(func=subcommand_required)
@@ -298,6 +338,9 @@ def main():
     parser_listing_fetch = subparsers_listing.add_parser('fetch')
     parser_listing_fetch.set_defaults(func=listing_fetch)
     parser_listing_fetch.add_argument('--name', '-n', required=True)
+    parser_listing_select = subparsers_listing.add_parser('select')
+    parser_listing_select.set_defaults(func=listing_select)
+    parser_listing_select.add_argument('--name', '-n', required=True)
 
     parser_project = subparsers.add_parser('project')
     subparsers_project = parser_project.add_subparsers()
@@ -319,6 +362,9 @@ def main():
     parser_project_analyze.set_defaults(func=project_analyze)
     parser_project_analyze.add_argument('--name','-n', required=False)
     parser_project_analyze.add_argument('--max', type=int, default=1)
+    parser_project_analyze.add_argument('--extension', type=str, required=False)
+    parser_project_deselect = subparsers_project.add_parser('deselect')
+    parser_project_deselect.set_defaults(func=project_deselect)
 
     parser_word = subparsers.add_parser('word')
     subparsers_word = parser_word.add_subparsers()
@@ -332,6 +378,9 @@ def main():
     parser_word_prune.set_defaults(func=word_prune)
     parser_word_stats = subparsers_word.add_parser('stats')
     parser_word_stats.set_defaults(func=word_stats)
+    parser_word_rm = subparsers_word.add_parser('rm')
+    parser_word_rm.set_defaults(func=word_rm)
+    parser_word_rm.add_argument('--all', action='store_true', required=True)
 
     parser_topic = subparsers.add_parser('topic')
     subparsers_topic = parser_topic.add_subparsers()
@@ -343,6 +392,7 @@ def main():
     parser_topic_extract.add_argument('--kl', action='store_true')
     parser_topic_extract.add_argument('--files', action='store_true')
     parser_topic_extract.add_argument('--filenorm', action='store_true')
+    parser_topic_extract.add_argument('--show', action='store_true')
     parser_topic_tsne = subparsers_topic.add_parser('tsne')
     parser_topic_tsne.set_defaults(func=topic_tsne)
     parser_topic_tsne.add_argument('--words', type=int, default=3000)

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import re
 
-re_github = re.compile(r'^https:\/\/github.com\/([-_a-zA-Z]+)\/([-_a-zA-Z]+)$')
+re_github = re.compile(r'^https:\/\/github.com\/([-_a-zA-Z0-9]+)\/([-_a-zA-Z0-9]+)$')
 
 def now_as_string():
     return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -33,7 +33,7 @@ def create_or_get_project_id(con, code_url, refetch):
     for row in cur.execute("SELECT id, metadata_date FROM project WHERE code_url = ?", (code_url,)):
         project_id,metadata_date = row
     if project_id == None:
-        cur.execute("INSERT INTO project(code_url) VALUES (?)", (code_url,))
+        cur.execute("INSERT INTO project(code_url, selected) VALUES (?, true)", (code_url,))
         for row in cur.execute("SELECT id FROM project WHERE code_url = ?", (code_url,)):
             project_id, = row
         if project_id == None:
@@ -112,6 +112,8 @@ def clone_project(con, project_id, host, git_https_url):
         owner = m.group(1)
         repo = m.group(2)
         s3_key = f'repos/{date}.github.{owner}.{repo}.tar.gz'
-        sha = github_clone_repo(con, git_https_url, s3_bucket, s3_key)
+        sha = github_clone_repo(con, git_https_url, s3_bucket, s3_key, max_size=50_000_000)
+        if sha == None:
+            return None, None, None
     date = now_as_string()
     return date, sha, f's3://{s3_bucket}/{s3_key}'

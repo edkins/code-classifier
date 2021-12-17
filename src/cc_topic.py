@@ -96,7 +96,7 @@ LIMIT ?""", (int(1.95 * num_analyses), max_distinct_words)):
             if word in word_to_index and analysis_id in file_indices:
                 rows.append(file_indices[analysis_id])
                 cols.append(word_to_index[word])
-                data.append(count)
+                data.append(1)
 
     print("Constructing csr_matrix")
     count_matrix = csr_matrix((data, (rows,cols)), shape=(n, n_features), dtype=np.float32)
@@ -106,7 +106,7 @@ LIMIT ?""", (int(1.95 * num_analyses), max_distinct_words)):
         model = LatentDirichletAllocation(n_topics, verbose=2)
         transformed = model.fit_transform(count_matrix)
     else:
-        if args.filenorm or args.files:
+        if args.filenorm or args.files or True:
             X = count_matrix
         else:
             print("Transforming count matrix to td-idf")
@@ -137,7 +137,7 @@ LIMIT ?""", (int(1.95 * num_analyses), max_distinct_words)):
 
         print()
 
-    if args.files or args.filenorm:
+    if (args.files or args.filenorm) and args.show:
         sum_vecs = defaultdict(lambda:np.zeros((n_topics,)))
         for item in range(n):
             analysis_id = item_analysis_id[item]
@@ -224,7 +224,8 @@ def topic_tsne(args):
                     data.append(count)
                 elif args.log:
                     if args.filenorm:
-                        data.append(math.log(1 + count) / file_counts[analysis_id])
+                        #data.append(math.log(1 + count) / file_counts[analysis_id])
+                        data.append(1 / math.sqrt(file_counts[analysis_id]))
                     else:
                         data.append(math.log(1 + count))
                 elif args.filenorm:
@@ -235,8 +236,7 @@ def topic_tsne(args):
     print("Constructing csr_matrix")
     count_matrix = csr_matrix((data, (rows,cols)), shape=(n, n_features), dtype=np.float32)
 
-    print("Normalizing")
-    X = count_matrix #normalize(count_matrix, norm='l1')
+    X = count_matrix
 
     if args.intermediate < n_features:
         print("Truncated SVD")

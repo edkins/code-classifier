@@ -13,7 +13,7 @@ def list_files_recursive(result, path):
             elif entry.is_file(follow_symlinks=False):
                 result.append(f'{path}/{entry.name}')
 
-def create_analysis(con, project_id, tempdir):
+def create_analysis(con, project_id, tempdir, extension):
     cur = con.cursor()
     s3_bucket = get_s3_bucket()
     files = []
@@ -31,12 +31,13 @@ def create_analysis(con, project_id, tempdir):
     errorcount = 0
     for filename in files:
         try:
-            with open(filename) as f:
-                for word in re.split("(?<=[a-z])(?=[A-Z])|[^a-zA-Z]+", f.read()):   # split on camelCase and non-alphabetic characters
-                    if len(word) >= 2 and len(word) <= maximum_word_length:
-                        counts[(word.lower(), filecount)] += 1
-                        wordcount += 1
-                filecount += 1
+            if extension == None or filename.endswith(f'.{extension}'):
+                with open(filename) as f:
+                    for word in re.split("(?<=[a-z])(?=[A-Z])|[^a-zA-Z]+", f.read()):   # split on camelCase and non-alphabetic characters
+                        if len(word) >= 2 and len(word) <= maximum_word_length:
+                            counts[(word.lower(), filecount)] += 1
+                            wordcount += 1
+                    filecount += 1
 
         except Exception as e:
             errorcount += 1   # expected if we encounter a binary file
